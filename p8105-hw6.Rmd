@@ -1,0 +1,143 @@
+---
+title: "HW 6"
+author: "Kamiah Brown"
+date: 2024-11-30
+output: github_document
+---
+### Set up 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(p8105.datasets)
+library(broom)
+library(modelr)
+set.seed(123)
+```
+#### Problem 1
+```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+```
+
+#bootstrapping
+```{r}
+bootstraps <- weather_df |> 
+  modelr::bootstrap(5000) |> 
+  mutate(strap = map(strap, as_tibble), 
+         linear_model = map(strap, \(df) lm(tmax ~ tmin, data = df)), 
+    results = map(linear_model, broom::tidy), 
+    summary = map(linear_model, broom::glance))
+
+bootstrap_rsquared <- bootstraps |> 
+  unnest(summary) |> 
+  select(.id, `r.squared`) 
+
+bootstrap_logestimate <- bootstraps |> 
+  unnest(results) |> 
+  select(.id, estimate) |> 
+  group_by(`.id`) |> 
+  summarize(log_estimate = prod(estimate) |> log()) 
+
+boots_results <- bootstrap_rsquared |> 
+  inner_join(bootstrap_logestimate, by = ".id")
+```
+
+```{r}
+boots_results |> 
+ pivot_longer(
+    cols = 2:3, 
+    names_to = "type",
+    values_to = "estimate"
+  ) |> 
+  mutate(
+    labels = case_when(type == "log_estimate" ~ "log(hat(beta[0])*hat(beta[1]))", 
+                      type == "r.squared" ~ "r^2")) |> 
+  ggplot(aes(x = estimate, fill = type)) +
+  geom_density(alpha = 0.4) +
+  facet_wrap(~labels, scales = "free", 
+             ncol = 1, labeller = label_parsed) +
+  theme(legend.position = "none") +
+  labs(x = "Estimate", 
+       y = "Density", title = "Distribution of the Estimates")
+
+```
+The estimates of r squared and log_estimate are normally distributed. 
+```{r}
+boots_results |> 
+  summarize(
+    boot_mean = mean(r.squared),
+    boot_sd = sd(r.squared),
+    boot_variance = var(r.squared),
+    boot_ci_ll = quantile(r.squared, 0.025),
+    boot_ci_ul = quantile(r.squared, 0.975)
+  )
+```
+The 95% confidence interval for the r^2 is (0.894, 0.927).
+
+```{r}
+boots_results |>
+summarize(
+    boot_mean = mean(log_estimate),
+    boot_sd = sd(log_estimate),
+    boot_variance = var(log_estimate),
+    boot_ci_ll = quantile(log_estimate, 0.025),
+    boot_ci_ul = quantile(log_estimate, 0.975)
+  )
+```
+The 95% confidence interval for log estimate is (1.96, 2.06).
+
+# Problem 2 
+```{r}
+homicide_df <- read_csv("homicide-data.csv") |>
+ mutate(
+    city_state = str_c(city, state, sep = ", "), 
+    solved = ifelse(str_detect(disposition, "Closed"), 1, 0)  #
+  ) %>%
+  filter(
+    !city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL"),
+    victim_race %in% c("White", "Black"),
+    victim_age != "Unknown"
+  ) %>%
+  mutate(
+    victim_age = as.numeric(victim_age), 
+    victim_race = fct_relevel(victim_race, "White") 
+  )
+```
+# city of Baltimore, MD
+```{r}
+baltimore_df = homicide_df |>
+  filter(city_state == "Baltimore, MD")
+
+logfit_bmore = 
+  glm(solved ~ victim_age + victim_race + victim_sex, data = baltimore_df, family = binomial()) %>% 
+  broom::tidy(conf.int = TRUE, conf.level = 0.95)
+
+odds_ratio = logfit_bmore %>%
+  mutate(
+    OR = exp(estimate),
+    CI_low = exp(conf.low),
+    CI_high = exp(conf.high)
+  ) %>% 
+  filter(term == "victim_sexMale") %>% 
+  select(OR, CI_low, CI_high, p.value) %>%  
+  knitr::kable(digits = 3)
+```
+
+```{r}
+
+```
+
+
+
